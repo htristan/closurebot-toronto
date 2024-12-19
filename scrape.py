@@ -21,8 +21,8 @@ DISCORD_WEBHOOK_URL = os.environ['DISCORD_WEBHOOK']
 AWS_ACCESS_KEY_ID = os.environ.get('AWS_DB_KEY', None)
 AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_DB_SECRET_ACCESS_KEY', None)
 
-discordUsername = "BC511"
-discordAvatarURL = "https://pbs.twimg.com/profile_images/1256233970905341959/EKlyRkOM_400x400.jpg"
+discordUsername = "DriveBC"
+discordAvatarURL = "https://pbs.twimg.com/profile_images/961736998745600000/Zrqm1EiB_400x400.jpg"
 
 # Fallback mechanism for credentials
 try:
@@ -127,8 +127,7 @@ def post_to_discord(event, post_type, threadName, point=None):
     # Add Event Type and Severity
     event_type = event.get("event_type", "UNKNOWN")
     severity = event.get("severity", "UNKNOWN")
-    embed.add_embed_field(name="Event Type", value=event_type.capitalize())
-    embed.add_embed_field(name="Severity", value=severity.capitalize())
+    embed.add_embed_field(name="Event Type", value=f"{event_type.capitalize()} - {severity.capitalize()}")
 
     # Add Timing Information
     schedule = event.get("schedule", {})
