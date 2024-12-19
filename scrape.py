@@ -171,7 +171,7 @@ def post_to_discord(event, post_type, threadName, point=None):
         longitude = point.x
         url_wme = f"https://www.waze.com/en-GB/editor?env=usa&lon={longitude}&lat={latitude}&zoomLevel=15"
         url_livemap = f"https://www.waze.com/live-map/directions?dir_first=no&latlng={latitude},{longitude}&overlay=false&zoom=16"
-        embed.add_embed_field(name="Map Links", value=f"[511]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
+        embed.add_embed_field(name="Map Links", value=f"[DriveBC]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
 
     # Set Footer and Timestamp
     embed.set_footer(text=config['license_notice'])
