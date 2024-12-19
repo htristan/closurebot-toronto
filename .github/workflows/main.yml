@@ -52,4 +52,4 @@ jobs:
 
     - name: Deploy to AWS Lambda
       run: |
-        aws lambda update-function-code --function-name $FUNCTION_NAME --zip-file fileb://function.zip
+        aws lambda update-function-code --function-name $FUNCTION_NAME --zip-file fileb://function.zip | jq 'del(.Environment)' | cat
