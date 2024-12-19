@@ -133,12 +133,12 @@ def post_to_discord(event, post_type, threadName, point=None):
     schedule = event.get("schedule", {})
     if "intervals" in schedule:
         intervals = schedule["intervals"]
-        start_time = intervals[0].split("/")[0] if intervals else "Unknown"
+        start_time = unix_to_readable(calendar.timegm(datetime.fromisoformat(intervals[0].split("/")[0]).timetuple())) if intervals else "Unknown"
         embed.add_embed_field(name="Start Time", value=start_time)
     elif "recurring_schedules" in schedule:
         recurring = schedule["recurring_schedules"][0]  # First recurring schedule
-        start_date = recurring.get("start_date", "Unknown")
-        end_date = recurring.get("end_date", "Unknown")
+        start_date = unix_to_readable(calendar.timegm(datetime.fromisoformat(recurring.get("start_date", "Unknown")).timetuple()))
+        end_date = unix_to_readable(calendar.timegm(datetime.fromisoformat(recurring.get("end_date", "Unknown")).timetuple()))
         daily_start = recurring.get("daily_start_time", "Unknown")
         daily_end = recurring.get("daily_end_time", "Unknown")
         embed.add_embed_field(name="Schedule", value=f"{start_date} to {end_date}\nDaily: {daily_start} - {daily_end}")
@@ -160,8 +160,10 @@ def post_to_discord(event, post_type, threadName, point=None):
     embed.add_embed_field(name="Description", value=event.get("description", "No description provided"), inline=False)
 
     # Add Metadata
-    embed.add_embed_field(name="Created", value=event.get("created", "Unknown"))
-    embed.add_embed_field(name="Last Updated", value=event.get("updated", "Unknown"))
+    created_unix = calendar.timegm(datetime.fromisoformat(event.get("created", "Unknown").replace("Z", "+00:00")).timetuple())
+    updated_unix = calendar.timegm(datetime.fromisoformat(event.get("updated", "Unknown").replace("Z", "+00:00")).timetuple())
+    embed.add_embed_field(name="Created", value=eunix_to_readable(created_unix))
+    embed.add_embed_field(name="Last Updated", value=unix_to_readable(updated_unix))
 
     driveBCID = event['id'].split("/")[-1]
     url511 = f"https://www.drivebc.ca/mobile/pub/events/id/{driveBCID}.html"
@@ -176,8 +178,8 @@ def post_to_discord(event, post_type, threadName, point=None):
     # Set Footer and Timestamp
     embed.set_footer(text=config['license_notice'])
     if "updated" in event:
-        updated_time = datetime.fromisoformat(event["updated"].replace("Z", "+00:00")).timestamp()
-        embed.set_timestamp(datetime.utcfromtimestamp(updated_time))
+        updated_timestamp = calendar.timegm(datetime.fromisoformat(event["updated"].replace("Z", "+00:00")).timetuple())
+        embed.set_timestamp(datetime.utcfromtimestamp(updated_timestamp))
 
     # Send to Discord
     webhook = DiscordWebhook(
