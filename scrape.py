@@ -162,7 +162,7 @@ def post_to_discord(event, post_type, threadName, point=None):
     # Add Metadata
     created_unix = calendar.timegm(datetime.fromisoformat(event.get("created", "Unknown").replace("Z", "+00:00")).timetuple())
     updated_unix = calendar.timegm(datetime.fromisoformat(event.get("updated", "Unknown").replace("Z", "+00:00")).timetuple())
-    embed.add_embed_field(name="Created", value=eunix_to_readable(created_unix))
+    embed.add_embed_field(name="Created", value=unix_to_readable(created_unix))
     embed.add_embed_field(name="Last Updated", value=unix_to_readable(updated_unix))
 
     driveBCID = event['id'].split("/")[-1]
