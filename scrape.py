@@ -173,7 +173,11 @@ def post_to_discord(event, post_type, threadName, point=None):
         longitude = point.x
         url_wme = f"https://www.waze.com/en-GB/editor?env=usa&lon={longitude}&lat={latitude}&zoomLevel=15"
         url_livemap = f"https://www.waze.com/live-map/directions?dir_first=no&latlng={latitude},{longitude}&overlay=false&zoom=16"
-        embed.add_embed_field(name="Map Links", value=f"[DriveBC]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
+        if post_type == 'archived':
+            embed.add_embed_field(name="Map Links", value=f"[WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
+        else:
+            embed.add_embed_field(name="Map Links", value=f"[DriveBC]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
+
 
     # Set Footer and Timestamp
     embed.set_footer(text=config['license_notice'])
@@ -337,6 +341,9 @@ def close_recent_events(data):
         markCompleted = False
         event_id = item['EventID']
 
+        # Extract a representative point
+        point = parse_geography(item['geography'])
+
         # If an item's ID is not in the set of active event IDs, mark it as closed
         if event_id not in active_event_ids:
             markCompleted = True
@@ -360,9 +367,9 @@ def close_recent_events(data):
             )
             # Notify about closure on Discord
             if 'DetectedPolygon' in item and item['DetectedPolygon'] is not None:
-                post_to_discord(item,'archived',item['DetectedPolygon'])
+                post_to_discord(item,'archived',item['DetectedPolygon'],point)
             else:
-                post_to_discord(item,'archived')
+                post_to_discord(item,'archived',None,point)
 
 def cleanup_old_events():
     # Get the current time and subtract 5 days to get the cut-off time
