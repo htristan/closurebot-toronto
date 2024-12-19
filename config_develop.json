@@ -1,11 +1,9 @@
 {
-  "db_name": "ON511-ClosureDB-Dev",
-  "function_name": "ClosureBot-ON511-Dev",
-  "Thread-SouthernOntario": 1123519680917819503,
-  "Thread-GTA": 1123517850502565898,
-  "Thread-CentralOntario": 1123517842969604138,
-  "Thread-NorthernOntario": 1123519381499019386,
-  "Thread-CatchAll": 1123663045743354059,
-  "license_notice": "Contains information licensed under the Open Government Licence – Ontario.",
-  "timezone": "US/Eastern"
+  "db_name": "BC511-ClosureDB-Dev",
+  "function_name": "ClosureBot-BC511-Dev",
+  "Thread-LowerMainland": 1319039438009008257,
+  "Thread-VancouverIsland": 1319039906999173140,
+  "Thread-CatchAll": 1318781113472389222,
+  "license_notice": "Contains information licensed under the Open Government Licence – British Columbia.",
+  "timezone": "US/Pacific"
 }

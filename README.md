@@ -1,9 +1,9 @@
-# Closure Reporting Bot - ON511
-This bot is designed to look at the ON511 public available API on a regular basis and do the following:
+# Closure Reporting Bot - BC511
+This bot is designed to look at the BC511/DriveBC public available API on a regular basis and do the following:
 1. Filter any notices for full closures, and filter to a specific geographic polygon.
 2. Determine if the filtered list has anything new that has not been notified on.
 3. Post whatever is new to a discord webhook
-4. Post another update when it notices the closure is removed by ON511.
+4. Post another update when it notices the closure is removed by BC511.
 5. Periodically clean up the database for old alerts that it no longer needs to track.
 
 
