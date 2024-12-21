@@ -69,10 +69,26 @@ def getThreadID(threadName):
     else:
         return config['Thread-CatchAll'] #Other catch all thread
 
-def unix_to_readable(unix_timestamp):
-    utc_time = datetime.utcfromtimestamp(int(unix_timestamp))
-    local_tz = timezone(config['timezone'])
-    local_time = utc_time.replace(tzinfo=timezone('UTC')).astimezone(local_tz)
+def unix_to_readable_with_timezone(iso_timestamp):
+    """
+    Converts an ISO 8601 timestamp with a timezone offset into a human-readable string.
+    If no timezone is present, defaults to the configured timezone in `config['timezone']`.
+    """
+    try:
+        # Parse the timestamp with dateutil to include timezone info
+        parsed_time = datetime.fromisoformat(iso_timestamp)
+    except ValueError:
+        # Handle improperly formatted timestamps
+        return "Invalid Timestamp"
+
+    # Convert to local timezone if present; fallback to config['timezone']
+    if parsed_time.tzinfo is not None:
+        local_time = parsed_time
+    else:
+        # If no timezone info exists, use the configured timezone as fallback
+        fallback_tz = timezone(config['timezone'])
+        local_time = parsed_time.replace(tzinfo=timezone('UTC')).astimezone(fallback_tz)
+
     return local_time.strftime('%Y-%b-%d %I:%M %p')
 
 def parse_geography(geography):
@@ -100,6 +116,21 @@ def check_which_polygon(areaName):
     else:
         return 'Other'
 
+def parse_time_with_fallback(iso_time_str, fallback_tz):
+    """
+    Parses an ISO 8601 timestamp, applying a fallback timezone if none exists in the input.
+    """
+    # Check if the string includes timezone information
+    if iso_time_str.endswith("Z"):  # UTC timezone indicated by 'Z'
+        dt = datetime.fromisoformat(iso_time_str.replace("Z", "+00:00"))
+    elif "+" in iso_time_str or "-" in iso_time_str[10:]:  # Already has a timezone offset
+        dt = datetime.fromisoformat(iso_time_str)
+    else:  # No timezone information, apply the fallback timezone
+        naive_dt = datetime.fromisoformat(iso_time_str)
+        dt = naive_dt.replace(tzinfo=fallback_tz)
+
+    return dt
+
 def post_to_discord(event, post_type, threadName, point=None):
     """
     Posts a message to Discord based on the type of event (closure, update, or archived),
@@ -109,17 +140,15 @@ def post_to_discord(event, post_type, threadName, point=None):
     threadID = getThreadID(threadName)
 
     # Get the title and color based on the post type
-    if post_type == "closure":
-        title = "New Event Detected"
-        color = 15548997  # Red
-    elif post_type == "update":
-        title = "Event Updated"
-        color = 16753920  # Orange
-    elif post_type == "archived":
-        title = "Event Cleared"
-        color = 52224  # Green
-    else:
+    post_types = {
+        "closure": {"title": "New Event Detected", "color": 15548997},
+        "update": {"title": "Event Updated", "color": 16753920},
+        "archived": {"title": "Event Cleared", "color": 52224},
+    }
+    if post_type not in post_types:
         raise ValueError(f"Unknown post type: {post_type}")
+    title = post_types[post_type]["title"]
+    color = post_types[post_type]["color"]
 
     # Create the embed
     embed = DiscordEmbed(title=title, color=color)
@@ -131,17 +160,26 @@ def post_to_discord(event, post_type, threadName, point=None):
 
     # Add Timing Information
     schedule = event.get("schedule", {})
-    if "intervals" in schedule:
-        intervals = schedule["intervals"]
-        start_time = unix_to_readable(calendar.timegm(datetime.fromisoformat(intervals[0].split("/")[0]).timetuple())) if intervals else "Unknown"
+    intervals = schedule.get("intervals", [])
+    recurring_schedules = schedule.get("recurring_schedules", [])
+    start_time = None
+
+    if intervals:
+        # Handle intervals if provided
+        interval_start_str = intervals[0].split("/")[0]  # Extract start time from interval
+        start_time = unix_to_readable_with_timezone(interval_start_str)
         embed.add_embed_field(name="Start Time", value=start_time)
-    elif "recurring_schedules" in schedule:
-        recurring = schedule["recurring_schedules"][0]  # First recurring schedule
-        start_date = unix_to_readable(calendar.timegm(datetime.fromisoformat(recurring.get("start_date", "Unknown")).timetuple()))
-        end_date = unix_to_readable(calendar.timegm(datetime.fromisoformat(recurring.get("end_date", "Unknown")).timetuple()))
+    elif recurring_schedules:
+        # Handle recurring schedules if provided
+        recurring = recurring_schedules[0]  # Assume the first recurring schedule
+        start_date = unix_to_readable_with_timezone(recurring.get("start_date", "Unknown"))
+        end_date = unix_to_readable_with_timezone(recurring.get("end_date", "Unknown"))
         daily_start = recurring.get("daily_start_time", "Unknown")
         daily_end = recurring.get("daily_end_time", "Unknown")
-        embed.add_embed_field(name="Schedule", value=f"{start_date} to {end_date}\nDaily: {daily_start} - {daily_end}")
+        embed.add_embed_field(
+            name="Schedule",
+            value=f"{start_date} to {end_date}\nDaily: {daily_start} - {daily_end}"
+        )
 
     # Add Road Information
     roads = event.get("roads", [])
@@ -160,10 +198,10 @@ def post_to_discord(event, post_type, threadName, point=None):
     embed.add_embed_field(name="Description", value=event.get("description", "No description provided"), inline=False)
 
     # Add Metadata
-    created_unix = calendar.timegm(datetime.fromisoformat(event.get("created", "Unknown").replace("Z", "+00:00")).timetuple())
-    updated_unix = calendar.timegm(datetime.fromisoformat(event.get("updated", "Unknown").replace("Z", "+00:00")).timetuple())
-    embed.add_embed_field(name="Created", value=unix_to_readable(created_unix))
-    embed.add_embed_field(name="Last Updated", value=unix_to_readable(updated_unix))
+    created_time = unix_to_readable_with_timezone(event.get("created", "Unknown"))
+    updated_time = unix_to_readable_with_timezone(event.get("updated", "Unknown"))
+    embed.add_embed_field(name="Created", value=created_time)
+    embed.add_embed_field(name="Last Updated", value=updated_time)
 
     driveBCID = event['id'].split("/")[-1]
     url511 = f"https://www.drivebc.ca/mobile/pub/events/id/{driveBCID}.html"
@@ -179,11 +217,36 @@ def post_to_discord(event, post_type, threadName, point=None):
             embed.add_embed_field(name="Map Links", value=f"[DriveBC]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
 
 
-    # Set Footer and Timestamp
+    # Set Footer
     embed.set_footer(text=config['license_notice'])
-    if "updated" in event:
-        updated_timestamp = calendar.timegm(datetime.fromisoformat(event["updated"].replace("Z", "+00:00")).timetuple())
-        embed.set_timestamp(datetime.utcfromtimestamp(updated_timestamp))
+
+    # Set the timestamp
+    if post_type == "closure":
+        if intervals:
+            # Use the interval start time if available
+            embed.set_timestamp(datetime.fromisoformat(interval_start_str).astimezone().isoformat())
+        else:
+            # Fallback to the event's created timestamp if intervals are not provided
+            created_at = event.get("created", None)
+            if created_at:
+                embed.set_timestamp(datetime.fromisoformat(created_at).astimezone().isoformat())
+            else:
+                # Final fallback to the current UTC time
+                embed.set_timestamp(datetime.utcnow().isoformat())
+    elif post_type == "update":
+        updated_at = event.get("updated", None)
+        if updated_at:
+            embed.set_timestamp(datetime.fromisoformat(updated_at).astimezone().isoformat())
+        else:
+            # Fallback to the current UTC time if updated timestamp is missing
+            embed.set_timestamp(datetime.utcnow().isoformat())
+    elif post_type == "archived":
+        last_touched = event.get("lastTouched", None)
+        if last_touched:
+            embed.set_timestamp(datetime.utcfromtimestamp(last_touched).isoformat())
+        else:
+            # Fallback to the current UTC time if lastTouched is missing
+            embed.set_timestamp(datetime.utcnow().isoformat())
 
     # Send to Discord
     webhook = DiscordWebhook(
