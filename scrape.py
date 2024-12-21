@@ -224,29 +224,29 @@ def post_to_discord(event, post_type, threadName, point=None):
     if post_type == "closure":
         if intervals:
             # Use the interval start time if available
-            embed.set_timestamp(datetime.fromisoformat(interval_start_str).astimezone().isoformat())
+            embed.set_timestamp(datetime.fromisoformat(interval_start_str).astimezone())
         else:
             # Fallback to the event's created timestamp if intervals are not provided
             created_at = event.get("created", None)
             if created_at:
-                embed.set_timestamp(datetime.fromisoformat(created_at).astimezone().isoformat())
+                embed.set_timestamp(datetime.fromisoformat(created_at).astimezone())
             else:
                 # Final fallback to the current UTC time
-                embed.set_timestamp(datetime.utcnow().isoformat())
+                embed.set_timestamp(datetime.utcnow())
     elif post_type == "update":
         updated_at = event.get("updated", None)
         if updated_at:
-            embed.set_timestamp(datetime.fromisoformat(updated_at).astimezone().isoformat())
+            embed.set_timestamp(datetime.fromisoformat(updated_at).astimezone())
         else:
             # Fallback to the current UTC time if updated timestamp is missing
-            embed.set_timestamp(datetime.utcnow().isoformat())
+            embed.set_timestamp(datetime.utcnow())
     elif post_type == "archived":
         last_touched = event.get("lastTouched", None)
         if last_touched:
-            embed.set_timestamp(datetime.utcfromtimestamp(last_touched).isoformat())
+            embed.set_timestamp(datetime.utcfromtimestamp(last_touched))
         else:
             # Fallback to the current UTC time if lastTouched is missing
-            embed.set_timestamp(datetime.utcnow().isoformat())
+            embed.set_timestamp(datetime.utcnow())
 
     # Send to Discord
     webhook = DiscordWebhook(
