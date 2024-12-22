@@ -24,6 +24,9 @@ AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_DB_SECRET_ACCESS_KEY', None)
 discordUsername = "DriveBC"
 discordAvatarURL = "https://pbs.twimg.com/profile_images/961736998745600000/Zrqm1EiB_400x400.jpg"
 
+# Fetch filter keywords from the config file
+FILTER_KEYWORDS = config.get('filter_keywords', [])
+
 # Fallback mechanism for credentials
 try:
     # Use environment variables if they exist
@@ -130,6 +133,23 @@ def parse_time_with_fallback(iso_time_str, fallback_tz):
         dt = naive_dt.replace(tzinfo=fallback_tz)
 
     return dt
+
+def contains_keywords(description, keywords=FILTER_KEYWORDS):
+    """
+    Check if the description contains any of the specified keywords.
+
+    Args:
+        description (str): The text to search for keywords.
+        keywords (list, optional): A list of keywords to search for. Defaults to FILTER_KEYWORDS.
+
+    Returns:
+        bool: True if any keyword is found in the description; False otherwise.
+    """
+    description = description.lower()
+    for keyword in keywords:
+        if keyword.lower() in description:
+            return True
+    return False
 
 def post_to_discord(event, post_type, threadName, point=None):
     """
@@ -321,8 +341,14 @@ def check_and_post_events():
                 FilterExpression=Attr('isActive').eq(1)
             )
 
+            # Get event description
+            description = event.get("description", "")
+
             #If the event is not in the DynamoDB table
             if not dbResponse['Items']:
+                # If the event is new, apply the keyword filter
+                if not contains_keywords(description):
+                    continue  # Skip if keywords are not found
                 # Set the EventID key in the event data
                 event['EventID'] = event['id']
                 # Set the isActive attribute

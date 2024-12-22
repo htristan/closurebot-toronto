@@ -5,5 +5,6 @@
   "Thread-VancouverIsland": 111,
   "Thread-CatchAll": 111,
   "license_notice": "Contains information licensed under the Open Government Licence – British Columbia.",
-  "timezone": "US/Pacific"
+  "timezone": "US/Pacific",
+  "filter_keywords": ["closed", "detour", "road closure", "both lanes", "hov lane blocked"]
 }
