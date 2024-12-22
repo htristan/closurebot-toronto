@@ -6,5 +6,5 @@
   "Thread-CatchAll": 1318781113472389222,
   "license_notice": "Contains information licensed under the Open Government Licence – British Columbia.",
   "timezone": "US/Pacific",
-  "filter_keywords": ["closed", "detour", "road closure", "both lanes", "hov lane blocked"]
+  "filter_keywords": ["closed", "detour", "road closure", "road closed", "both lanes", "hov lane blocked", "full closure" , "all lanes closed", "both directions blocked", "impassable"]
 }
