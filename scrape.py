@@ -4,7 +4,7 @@ import time
 import boto3
 from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.conditions import Key
-from shapely.geometry import Point, Polygon, LineString
+from shapely.geometry import Point, LineString
 from decimal import Decimal
 from discord_webhook import DiscordWebhook, DiscordEmbed
 import os
@@ -12,24 +12,35 @@ from datetime import datetime, timedelta, date
 import calendar
 from pytz import timezone
 import random
+import logging
 
-# Load the configuration file
+# Load config
 with open('config.json', 'r') as f:
     config = json.load(f)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler()  # Logs to the console
+    ]
+)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 DISCORD_WEBHOOK_URL = os.environ['DISCORD_WEBHOOK']
 AWS_ACCESS_KEY_ID = os.environ.get('AWS_DB_KEY', None)
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_DB_SECRET_ACCESS_KEY', None)
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_DB_SECRET_ACCESS_KEY', None) 
 
-discordUsername = "DriveBC"
-discordAvatarURL = "https://pbs.twimg.com/profile_images/961736998745600000/Zrqm1EiB_400x400.jpg"
+# (Optional) Keep a Discord username/avatar
+discordUsername = "Toronto511"
+discordAvatarURL = "https://www.toronto.ca/wp-content/uploads/2018/02/964b-toronto-logo.png"
 
-# Fetch filter keywords from the config file
+# Keep filter keywords logic but do NOT filter out events in practice
 FILTER_KEYWORDS = config.get('filter_keywords', [])
 
-# Fallback mechanism for credentials
 try:
-    # Use environment variables if they exist
     if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
         dynamodb = boto3.resource(
             'dynamodb',
@@ -38,453 +49,421 @@ try:
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY
         )
     else:
-        # Otherwise, use IAM role permissions (default behavior of boto3)
         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
-except (NoCredentialsError, PartialCredentialsError):
+except Exception as e:
     print("AWS credentials are not properly configured. Ensure IAM role or environment variables are set.")
     raise
 
-# Specify the name of your DynamoDB table
 table = dynamodb.Table(config['db_name'])
 
-# set the current UTC timestamp for use in a few places
+# Current UTC timestamp
 utc_timestamp = calendar.timegm(datetime.utcnow().timetuple())
 
+
 def float_to_decimal(data):
-    """
-    Recursively converts all float values in the input (dict, list, or scalar) to Decimal,
-    as DynamoDB does not support float.
-    """
+    """Recursively convert all float values to Decimal."""
     if isinstance(data, float):
-        return Decimal(str(data))  # Convert float to Decimal
+        return Decimal(str(data))
     elif isinstance(data, dict):
-        return {key: float_to_decimal(value) for key, value in data.items()}  # Recurse into dict
+        return {key: float_to_decimal(value) for key, value in data.items()}
     elif isinstance(data, list):
-        return [float_to_decimal(item) for item in data]  # Recurse into list
-    else:
-        return data  # Return data as-is if not float, dict, or list
+        return [float_to_decimal(item) for item in data]
+    return data
 
-def getThreadID(threadName):
-    if threadName == 'LowerMainland':
-        return config['Thread-LowerMainland']
-    elif threadName == 'VancouverIsland':
-        return config['Thread-VancouverIsland']
-    else:
-        return config['Thread-CatchAll'] #Other catch all thread
 
-def unix_to_readable_with_timezone(iso_timestamp):
+def unix_ms_to_local_str(unix_ms):
     """
-    Converts an ISO 8601 timestamp with a timezone offset into a human-readable string.
-    If no timezone is present, defaults to the configured timezone in `config['timezone']`.
+    Convert Unix timestamp in milliseconds to a local time string using config['timezone'].
     """
+    if not unix_ms:
+        return "Unknown"
     try:
-        # Parse the timestamp with dateutil to include timezone info
-        parsed_time = datetime.fromisoformat(iso_timestamp)
-    except ValueError:
-        # Handle improperly formatted timestamps
-        return "Invalid Timestamp"
+        unix_s = int(unix_ms) / 1000
+        dt_utc = datetime.utcfromtimestamp(unix_s)
+        local_tz = timezone(config['timezone'])
+        dt_local = dt_utc.replace(tzinfo=timezone('UTC')).astimezone(local_tz)
+        return dt_local.strftime('%Y-%b-%d %I:%M %p')
+    except:
+        return "Unknown"
 
-    # Convert to local timezone if present; fallback to config['timezone']
-    if parsed_time.tzinfo is not None:
-        local_time = parsed_time
-    else:
-        # If no timezone info exists, use the configured timezone as fallback
-        fallback_tz = timezone(config['timezone'])
-        local_time = parsed_time.replace(tzinfo=timezone('UTC')).astimezone(fallback_tz)
 
-    return local_time.strftime('%Y-%b-%d %I:%M %p')
-
-def parse_geography(geography):
+def parse_geography(item):
     """
-    Parses the geography field to extract a representative Point.
-    Handles Point and LineString geometries.
+    Parse 'geoPolyline' or lat/lng from the item to create a Shapely Point.
+    If 'geoPolyline' has multiple coordinates, return its midpoint as a Point.
     """
-    if geography['type'] == 'Point':
-        # Return the Point directly
-        coordinates = geography['coordinates']
-        return Point(coordinates[0], coordinates[1])
-    elif geography['type'] == 'LineString':
-        # Handle LineString: pick the midpoint as the representative point
-        line = LineString(geography['coordinates'])
-        return line.interpolate(0.5, normalized=True)  # Midpoint
-    else:
-        raise ValueError(f"Unsupported geography type: {geography['type']}")
+    geo_poly = item.get("geoPolyline")
+    lat_str = item.get("latitude")
+    lon_str = item.get("longitude")
 
-def check_which_polygon(areaName):
-    # Function to see which polygon a point is in, and returns the text. Returns "Other" if unknown.
-    if areaName == 'Lower Mainland District':
-        return 'LowerMainland'
-    elif areaName == 'Vancouver Island District':
-        return 'VancouverIsland'
-    else:
-        return 'Other'
+    # If we have a geoPolyline
+    if geo_poly:
+        coords_str = geo_poly.strip()
+        coords_str = coords_str.replace("[", "").replace("]", "")
+        parts = coords_str.split(",")
+        coordinate_pairs = []
 
-def parse_time_with_fallback(iso_time_str, fallback_tz):
-    """
-    Parses an ISO 8601 timestamp, applying a fallback timezone if none exists in the input.
-    """
-    # Check if the string includes timezone information
-    if iso_time_str.endswith("Z"):  # UTC timezone indicated by 'Z'
-        dt = datetime.fromisoformat(iso_time_str.replace("Z", "+00:00"))
-    elif "+" in iso_time_str or "-" in iso_time_str[10:]:  # Already has a timezone offset
-        dt = datetime.fromisoformat(iso_time_str)
-    else:  # No timezone information, apply the fallback timezone
-        naive_dt = datetime.fromisoformat(iso_time_str)
-        dt = naive_dt.replace(tzinfo=fallback_tz)
+        # Parse the coordinates into pairs
+        for i in range(0, len(parts), 2):
+            lon_val = float(parts[i])
+            lat_val = float(parts[i + 1])
+            coordinate_pairs.append((lon_val, lat_val))
 
-    return dt
+        # If only one pair, return it as a Point
+        if len(coordinate_pairs) == 1:
+            return Point(coordinate_pairs[0][0], coordinate_pairs[0][1])
+
+        # If multiple pairs, calculate the midpoint of the LineString
+        line = LineString(coordinate_pairs)
+        midpoint = line.interpolate(0.5, normalized=True)  # Normalized=True gives a true midpoint
+        return Point(midpoint.x, midpoint.y)
+
+    # Fallback to lat/long if geoPolyline is empty or not present
+    if lat_str and lon_str:
+        return Point(float(lon_str), float(lat_str))  # (x=lon, y=lat)
+
+    # If neither is present, return None
+    return None
+
 
 def contains_keywords(description, keywords=FILTER_KEYWORDS):
     """
-    Check if the description contains any of the specified keywords.
-
-    Args:
-        description (str): The text to search for keywords.
-        keywords (list, optional): A list of keywords to search for. Defaults to FILTER_KEYWORDS.
-
-    Returns:
-        bool: True if any keyword is found in the description; False otherwise.
+    Return True if the description contains any of the given keywords.
+    For now, we won't use the result to skip, but let's keep the function.
     """
-    description = description.lower()
+    desc_lower = description.lower()
     for keyword in keywords:
-        if keyword.lower() in description:
+        if keyword.lower() in desc_lower:
             return True
     return False
 
-def post_to_discord(event, post_type, threadName, point=None):
-    """
-    Posts a message to Discord based on the type of event (closure, update, or archived),
-    including thread routing and geo information.
-    """
-    # Get the thread ID based on the thread name
-    threadID = getThreadID(threadName)
 
-    # Get the title and color based on the post type
+def build_weekly_schedule_field(event):
+    """
+    Collect scheduleMonday, scheduleTuesday, etc., into a single multiline string.
+    Include 'workPeriod' and 'scheduleEveryday' if they exist.
+    """
+    schedule_lines = []
+
+    # Include workPeriod if it exists
+    work_period = event.get("workPeriod")
+    if work_period:
+        schedule_lines.append(f"Work Period: {work_period}")
+
+    # Check for scheduleEveryday
+    schedule_everyday = event.get("scheduleEveryday")
+    if schedule_everyday:
+        # Display the everyday schedule explicitly
+        schedule_lines.append(f"Every Day: {schedule_everyday}")
+    else:
+        # Otherwise, collect individual day schedules
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        for day in days:
+            field_name = f"schedule{day}"
+            if event.get(field_name):
+                # e.g., "Mon: 09:30-15:30"
+                schedule_lines.append(f"{day[:3]}: {event[field_name]}")
+
+    # Return a formatted string or None if no schedule data exists
+    if schedule_lines:
+        return "\n".join(schedule_lines)
+    return None
+
+# Send with rate limit handling
+def send_webhook_with_retry(webhook, retries=1):
+    """
+    Executes the webhook with retry logic for rate-limiting (429) responses, capped at a single retry.
+    Caps sleep duration at 2 seconds.
+    """
+    response = webhook.execute()
+    if response.status_code in [200, 204]:
+        logger.debug("Webhook executed successfully")
+        return response
+    elif response.status_code == 429:  # Rate limit
+        if retries <= 0:
+            logger.error("Rate limit exceeded and maximum retries reached. Aborting.")
+            return response  # Exit gracefully after the last retry
+
+        try:
+            # Use retry_after directly (assume it's in seconds) and cap at 2 seconds
+            retry_after = float(response.json().get("retry_after", 1))
+            retry_after = min(retry_after, 2.0)  # Cap at 2 seconds
+            logger.debug(f"Parsed retry_after: {retry_after:.2f} seconds")
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.error(f"Failed to parse retry_after value: {e}")
+            retry_after = 1.0  # Default to 1 second if parsing fails
+
+        logger.warning(f"Rate limited. Retrying after {retry_after:.2f} seconds... (Retries left: {retries - 1})")
+        time.sleep(retry_after + 0.1)  # Add a small buffer
+        return send_webhook_with_retry(webhook, retries=retries - 1)  # Retry once
+    else:
+        logger.error(
+            f"Webhook execution failed with status {response.status_code}: {response.content.decode('utf-8')}"
+        )
+        return response
+
+def post_to_discord(event, post_type, point=None):
+    """
+    Send an event to a single Discord thread for Toronto with enhanced formatting.
+    """
+
     post_types = {
-        "closure": {"title": "New Event Detected", "color": 15548997},
-        "update": {"title": "Event Updated", "color": 16753920},
-        "archived": {"title": "Event Cleared", "color": 52224},
+        "closure":  {"title": "New Closure Detected", "color": 15548997},
+        "update":   {"title": "Closure Updated",      "color": 16753920},
+        "archived": {"title": "Closure Cleared",      "color": 52224},
     }
     if post_type not in post_types:
         raise ValueError(f"Unknown post type: {post_type}")
-    title = post_types[post_type]["title"]
-    color = post_types[post_type]["color"]
 
-    # Create the embed
-    embed = DiscordEmbed(title=title, color=color)
+    embed = DiscordEmbed(
+        title=post_types[post_type]["title"],
+        color=post_types[post_type]["color"]
+    )
 
-    # Add Event Type and Severity
-    event_type = event.get("event_type", "UNKNOWN")
-    severity = event.get("severity", "UNKNOWN")
-    embed.add_embed_field(name="Event Type", value=f"{event_type.capitalize()} - {severity.capitalize()}")
+    # Fields
+    # 1) Event Type & "Maximum Impact"
+    event_type = event.get("type", "UNKNOWN")  # e.g., "CONSTRUCTION" or "ROAD_CLOSED"
+    max_impact = event.get("maxImpact", "Unknown")  # e.g., "Low", "Medium", "High"
+    embed.add_embed_field(name="Event Type", value=event_type)
+    embed.add_embed_field(name="Maximum Impact", value=max_impact)
 
-    # Add Timing Information
-    schedule = event.get("schedule", {})
-    intervals = schedule.get("intervals", [])
-    recurring_schedules = schedule.get("recurring_schedules", [])
-    start_time = None
+    # 2) Start & End Times
+    start_time = unix_ms_to_local_str(event.get("startTime"))
+    end_time = unix_ms_to_local_str(event.get("endTime"))
+    embed.add_embed_field(name="Start Time", value=start_time)
+    embed.add_embed_field(name="End Time", value=end_time)
 
-    if intervals:
-        # Handle intervals if provided
-        interval_start_str = intervals[0].split("/")[0]  # Extract start time from interval
-        start_time = unix_to_readable_with_timezone(interval_start_str)
-        embed.add_embed_field(name="Start Time", value=start_time)
-    elif recurring_schedules:
-        # Handle recurring schedules if provided
-        recurring = recurring_schedules[0]  # Assume the first recurring schedule
-        start_date = unix_to_readable_with_timezone(recurring.get("start_date", "Unknown"))
-        end_date = unix_to_readable_with_timezone(recurring.get("end_date", "Unknown"))
-        daily_start = recurring.get("daily_start_time", "Unknown")
-        daily_end = recurring.get("daily_end_time", "Unknown")
-        embed.add_embed_field(
-            name="Schedule",
-            value=f"{start_date} to {end_date}\nDaily: {daily_start} - {daily_end}"
-        )
+    # 3) Road, Name, From/To
+    road_name = event.get("road", "Unknown")
+    closure_name = event.get("name", "")
+    from_road = event.get("fromRoad", "")
+    to_road = event.get("toRoad", "")
+    road_display = f"{road_name} - {closure_name}" if closure_name else road_name
+    embed.add_embed_field(name="Affected Road", value=road_display)
 
-    # Add Road Information
-    roads = event.get("roads", [])
-    if roads:
-        road_info = "\n".join(
-            [
-                f"{road['name']} ({road['direction']})"
-                + (f" from {road['from']}" if "from" in road else "")
-                + (f" to {road['to']}" if "to" in road else "")
-                for road in roads
-            ]
-        )
-        embed.add_embed_field(name="Affected Roads", value=road_info, inline=False)
+    if from_road and to_road:
+        embed.add_embed_field(name="From/To", value=f"{from_road} -> {to_road}")
 
-    # Add Description
+    # 4) District (properly capitalized)
+    district = event.get("district") or "Unknown District"  # Fallback to "Unknown District" if None
+    embed.add_embed_field(name="District", value=district.title())
+
+    # 5) Directions Affected
+    directions_affected = event.get("directionsAffected", "Unknown")
+    if directions_affected:
+        embed.add_embed_field(name="Directions Affected", value=directions_affected)
+
+    # 6) Work Event Type
+    work_event_type = event.get("workEventType", None)
+    if work_event_type:
+        embed.add_embed_field(name="Work Type", value=work_event_type)
+
+    # 7) Description
     embed.add_embed_field(name="Description", value=event.get("description", "No description provided"), inline=False)
 
-    # Add Metadata
-    created_time = unix_to_readable_with_timezone(event.get("created", "Unknown"))
-    updated_time = unix_to_readable_with_timezone(event.get("updated", "Unknown"))
+    # 8) Created & Updated
+    created_time = unix_ms_to_local_str(event.get("createdTime"))
+    updated_time = unix_ms_to_local_str(event.get("lastUpdated"))
     embed.add_embed_field(name="Created", value=created_time)
     embed.add_embed_field(name="Last Updated", value=updated_time)
 
-    driveBCID = event['id'].split("/")[-1]
-    url511 = f"https://www.drivebc.ca/mobile/pub/events/id/{driveBCID}.html"
-    # Add Geo Information and Map Links
+    # 9) Weekly Schedule
+    schedule_field = build_weekly_schedule_field(event)
+    if schedule_field:
+        embed.add_embed_field(name="Weekly Schedule", value=schedule_field, inline=False)
+
+    # 10) Waze Map Links
     if point:
-        latitude = point.y
-        longitude = point.x
-        url_wme = f"https://www.waze.com/en-GB/editor?env=usa&lon={longitude}&lat={latitude}&zoomLevel=15"
-        url_livemap = f"https://www.waze.com/live-map/directions?dir_first=no&latlng={latitude},{longitude}&overlay=false&zoom=16"
-        if post_type == 'archived':
-            embed.add_embed_field(name="Map Links", value=f"[WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
-        else:
-            embed.add_embed_field(name="Map Links", value=f"[DriveBC]({url511}) | [WME]({url_wme}) | [Livemap]({url_livemap})", inline=False)
+        lat = point.y
+        lon = point.x
+        wme_url = f"https://www.waze.com/en-GB/editor?env=usa&lon={lon}&lat={lat}&zoomLevel=17"
+        livemap_url = f"https://www.waze.com/live-map/directions?dir_first=no&latlng={lat},{lon}&overlay=false&zoom=17"
+        embed.add_embed_field(name="Map Links", value=f"[WME]({wme_url}) | [Livemap]({livemap_url})", inline=False)
 
-
-    # Set Footer
+    # 11) Footer / Timestamp
     embed.set_footer(text=config['license_notice'])
-
-    # Set the timestamp
-    if post_type == "closure":
-        # Final fallback to the current UTC time
-        embed.set_timestamp(datetime.utcnow())
-    elif post_type == "update":
+    if post_type in ["closure", "update"]:
         embed.set_timestamp(datetime.utcnow())
     elif post_type == "archived":
-        last_touched = event.get("lastTouched", None)
+        last_touched = event.get("lastTouched")
         if last_touched:
             embed.set_timestamp(datetime.utcfromtimestamp(last_touched))
         else:
-            # Fallback to the current UTC time if lastTouched is missing
             embed.set_timestamp(datetime.utcnow())
 
-    # Send to Discord
+    # Send
     webhook = DiscordWebhook(
         url=DISCORD_WEBHOOK_URL,
         username=discordUsername,
-        avatar_url=discordAvatarURL,
-        thread_id=threadID  # Route to the correct thread
+        avatar_url=discordAvatarURL
     )
     webhook.add_embed(embed)
-    webhook.execute()
+    send_webhook_with_retry(webhook)
+
 
 def fetch_all_events():
-    base_url = "https://api.open511.gov.bc.ca/events"
-    limit = 300  # Define the limit per API call
-    severities = ["MAJOR", "MODERATE"]  # List of severities to filter
-    all_events = []  # List to store all events
+    """
+    Fetch from Toronto v3 endpoint. Return in {"events": <list>} shape for consistency.
+    """
+    base_url = "https://secure.toronto.ca/opendata/cart/road_restrictions/v3?format=json"
+    response = requests.get(base_url)
+    if not response.ok:
+        raise Exception(f"Error connecting to Toronto Road Restrictions API: {response.status_code}")
 
-    for severity in severities:
-        offset = 0  # Start at the beginning for each severity
-        while True:
-            # Make the API request with limit, offset, and severity filter
-            response = requests.get(f"{base_url}?severity={severity}&limit={limit}&offset={offset}")
-            
-            if not response.ok:
-                raise Exception(f"Error connecting to BC511 API for severity {severity}: {response.status_code} - {response.text}")
-            
-            # Parse the response JSON
-            data = response.json()
-            
-            # Extract the events
-            events = data.get('events', [])
-            if not events:
-                break  # Exit the loop if no more events are returned
+    data = response.json()
+    # data["Closure"] is the list of closures
+    closure_list = data.get("Closure", [])
+    return {"events": closure_list}
 
-            # Add the events to the list
-            all_events.extend(events)
-
-            # Increment the offset by the limit for the next batch
-            offset += limit
-
-            # Break if fewer events were returned than the limit (last page)
-            if len(events) < limit:
-                break
-
-    # Return a dictionary structured like the original API response
-    return {"events": all_events}
 
 def check_and_post_events():
-    #check if we need to clean old events
+    # (1) Cleanup if needed
     last_execution_day = get_last_execution_day()
     today = date.today().isoformat()
     if last_execution_day is None or last_execution_day < today:
-        # Perform cleanup of old events
         cleanup_old_events()
-
-        # Update last execution day to current date
         update_last_execution_day()
 
-    # Fetch Events from BC API
+    # (2) Fetch current closures
     data = fetch_all_events()
-
-    #use the response to close out anything recent
+    # (3) Mark archived any that are missing or expired=1
     close_recent_events(data)
 
-    # Iterate over the events
+    eventCount = 0
+
+    # (4) Post new or updated
     for event in data['events']:
-        if event['status'] == 'ACTIVE':
-            # Parse geography
-            geography = event.get('geography', {})
-            if not geography:
-                continue  # Skip if no geographical info is available
+        eventCount += 1
+        is_expired = (event.get('expired', 0) == 1)
+        if is_expired:
+            continue  # skip, already archived or about to be archived
 
-            # Extract a representative point
-            point = parse_geography(geography)
+        # We'll treat "ACTIVE" if expired=0
+        event['status'] = 'ACTIVE'
 
-            # Determine the area name from 'areas'
-            if 'areas' in event and isinstance(event['areas'], list) and len(event['areas']) > 0:
-                area_name = event['areas'][0].get('name', 'Unknown')  # Safely get the 'name' field
-            else:
-                area_name = None
-            detectedPolygon = check_which_polygon(area_name)
+        # Keep the logic for keywords, but not skip:
+        #   contains_keywords(event.get("description",""), FILTER_KEYWORDS)
 
-            # Try to get the event with the specified ID and isActive=1 from the DynamoDB table
-            dbResponse = table.query(
-                KeyConditionExpression=Key('EventID').eq(event['id']),
-                FilterExpression=Attr('isActive').eq(1)
-            )
+        # Maximum impact filter out low and unknown
+        max_impact = event.get("maxImpact", "Unknown").lower()
+        if max_impact not in {'medium','high'}:
+            continue
 
-            # Get event description
-            description = event.get("description", "")
+        # Build geometry
+        point_or_line = parse_geography(event)
+        # Attempt to find if already in DB
+        dbResponse = table.query(
+            KeyConditionExpression=Key('EventID').eq(event['id']),
+            FilterExpression=Attr('isActive').eq(1)
+        )
+        if not dbResponse['Items']:
+            # New event
+            event['EventID'] = event['id']
+            event['isActive'] = 1
+            event['lastTouched'] = utc_timestamp
 
-            #If the event is not in the DynamoDB table
-            if not dbResponse['Items']:
-                # If the event is new, apply the keyword filter
-                if not contains_keywords(description):
-                    continue  # Skip if keywords are not found
-                # Set the EventID key in the event data
+            # Convert float->decimal
+            event = float_to_decimal(event)
+
+            post_to_discord(event, "closure", point_or_line)
+            # Store in DB
+            table.put_item(Item=event)
+        else:
+            # Already known
+            stored_item = dbResponse['Items'][0]
+            stored_lastUpdated = stored_item.get('lastUpdated')
+            current_lastUpdated = event.get('lastUpdated')
+
+            event = float_to_decimal(event)
+
+            if current_lastUpdated and stored_lastUpdated and current_lastUpdated != stored_lastUpdated:
+                # Something changed => Update
                 event['EventID'] = event['id']
-                # Set the isActive attribute
                 event['isActive'] = 1
-                # set LastTouched
                 event['lastTouched'] = utc_timestamp
-                event['DetectedPolygon'] = detectedPolygon
-                # Convert float values in the event to Decimal
-                event = float_to_decimal(event)
-                # If the event is within the specified area and has not been posted before, post it to Discord
-                post_to_discord(event,'closure',detectedPolygon,point)
-                # Add the event ID to the DynamoDB table
+
+                post_to_discord(event, "update", point_or_line)
                 table.put_item(Item=event)
-            else:
-                # We have seen this event before
-                # First, let's see if it has a lastupdated time
-                event = float_to_decimal(event)
-                stored_event = dbResponse['Items'][0]
-                lastUpdated = stored_event.get('LastUpdated')
-                if lastUpdated != None:
-                    # Now, see if the version we stored is different
-                    if lastUpdated != stored_event['LastUpdated']:
-                        # Store the most recent updated time:
-                        event['EventID'] = event['id']
-                        event['isActive'] = 1
-                        event['lastTouched'] = utc_timestamp
-                        event['DetectedPolygon'] = check_which_polygon_point(point)
-                        # It's different, so we should fire an update notification
-                        post_to_discord(event,'update',detectedPolygon,point)
-                        table.put_item(Item=event)
-                # get the lasttouched time
-                lastTouched_datetime = datetime.fromtimestamp(int(dbResponse['Items'][0].get('lastTouched')))
-                # store the current time now
-                now = datetime.fromtimestamp(utc_timestamp)
-                # Compute the difference in minutes between now and lastUpdated
-                time_diff_min = (now - lastTouched_datetime).total_seconds() / 60
-                # Compute the variability
-                variability = random.uniform(-2, 2)  # random float between -2 and 2
-                # Add variability to the time difference
-                time_diff_min += variability
-                # If time_diff_min > 5, then more than 5 minutes have passed (considering variability)
-                if abs(time_diff_min) > 5:
-                    # let's store that we just saw it to keep track of the last touch time
-                    table.update_item(
-                        Key={'EventID': event['id']},
-                        UpdateExpression="SET lastTouched = :val",
-                        ExpressionAttributeValues={':val': utc_timestamp}
-                    )
+
+            # Also keep lastTouched fresh if >5 minutes
+            lastTouched_dt = datetime.fromtimestamp(int(stored_item.get('lastTouched', utc_timestamp)))
+            now = datetime.fromtimestamp(utc_timestamp)
+            diff_min = (now - lastTouched_dt).total_seconds() / 60
+            diff_min += random.uniform(-2, 2)  # jitter
+            if abs(diff_min) > 5:
+                table.update_item(
+                    Key={'EventID': event['id']},
+                    UpdateExpression="SET lastTouched = :val",
+                    ExpressionAttributeValues={':val': utc_timestamp}
+                )
+
+    logger.info(f"Processed {eventCount} events")
+
 
 def close_recent_events(data):
-    # Ensure the expected structure is present
-    if 'events' not in data or not isinstance(data['events'], list):
-        raise KeyError("The API response does not contain a valid 'events' list.")
+    """
+    Mark events as archived if they are missing from the current feed or have expired=1.
+    Then post 'archived' to Discord.
+    """
+    active_ids = {
+        e['id'] for e in data['events']
+        if e.get('expired', 0) == 0
+    }
 
-    # Create a set of active event IDs
-    active_event_ids = {event['id'] for event in data['events']}
-
-    # Get the list of event IDs in the table
-    response = table.scan(
-        FilterExpression=Attr('isActive').eq(1)
-    )
-
-    # Iterate over the items
+    response = table.scan(FilterExpression=Attr('isActive').eq(1))
     for item in response['Items']:
-        markCompleted = False
         event_id = item['EventID']
-
-        # Extract a representative point
-        point = parse_geography(item['geography'])
-
-        # If an item's ID is not in the set of active event IDs, mark it as closed
-        if event_id not in active_event_ids:
+        # If not in feed or is expired
+        if event_id not in active_ids:
             markCompleted = True
         else:
-            # item exists, but now we need to check to see if it's no longer a full closure
-            event_data = next((e for e in data['events'] if e['id'] == event_id), None)
-            if event_data and event_data.get('status', '').upper() != 'ACTIVE':
-                #now it's no longer a full closure - markt it as closed.
+            # Double-check if it's set to expired
+            matching_item = next((x for x in data['events'] if x['id'] == event_id), None)
+            if matching_item and matching_item.get('expired', 0) == 1:
                 markCompleted = True
+            else:
+                markCompleted = False
 
-        # process relevant completions
         if markCompleted:
-            # Convert float values in the item to Decimal
-            item = float_to_decimal(item)
-
-            # Remove the isActive attribute from the item
+            # Mark isActive=0
             table.update_item(
                 Key={'EventID': event_id},
                 UpdateExpression="SET isActive = :val",
                 ExpressionAttributeValues={':val': 0}
             )
-            # Notify about closure on Discord
-            if 'DetectedPolygon' in item and item['DetectedPolygon'] is not None:
-                post_to_discord(item,'archived',item['DetectedPolygon'],point)
-            else:
-                post_to_discord(item,'archived',None,point)
+            # Post archived
+            point_or_line = parse_geography(item)
+            post_to_discord(item, "archived", point_or_line)
+
 
 def cleanup_old_events():
-    # Get the current time and subtract 5 days to get the cut-off time
+    """
+    Purge events that haven't been updated in 5+ days and are inactive.
+    """
     now = datetime.now()
     cutoff = now - timedelta(days=5)
-    # Convert the cutoff time to Unix timestamp
     cutoff_unix = Decimal(str(cutoff.timestamp()))
-    # Initialize the scan parameters
+
     scan_params = {
-        'FilterExpression': Attr('LastUpdated').lt(cutoff_unix) & Attr('isActive').eq(0)
+        'FilterExpression': Attr('lastUpdated').lt(cutoff_unix) & Attr('isActive').eq(0)
     }
     while True:
-        # Perform the scan operation
         response = table.scan(**scan_params)
-        # Iterate over the matching items and delete each one
         for item in response['Items']:
-            table.delete_item(
-                Key={
-                    'EventID': item['EventID']
-                }
-            )
-        # If the scan returned a LastEvaluatedKey, continue the scan from where it left off
+            table.delete_item(Key={'EventID': item['EventID']})
         if 'LastEvaluatedKey' in response:
             scan_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
         else:
-            # If no LastEvaluatedKey was returned, the scan has completed and we can break from the loop
             break
 
-def get_last_execution_day():
-    response = table.query(
-        KeyConditionExpression=Key('EventID').eq('LastCleanup')
-    )
 
+def get_last_execution_day():
+    response = table.query(KeyConditionExpression=Key('EventID').eq('LastCleanup'))
     items = response.get('Items')
     if items:
-        item = items[0]
-        last_execution_day = item.get('LastExecutionDay')
-        return last_execution_day
-
+        return items[0].get('LastExecutionDay')
     return None
+
 
 def update_last_execution_day():
     today = datetime.now().date().isoformat()
@@ -495,9 +474,18 @@ def update_last_execution_day():
         }
     )
 
+
 def lambda_handler(event, context):
+    # Record the start time
+    start_time = time.time()
     check_and_post_events()
+    # Calculate and log the total runtime
+    total_runtime = time.time() - start_time
+    logger.info(f"Total runtime: {total_runtime:.2f} seconds")
 
 if __name__ == "__main__":
-    print("Running as a standalone script...")
-    check_and_post_events()
+    logger.info("Running as a standalone script...")
+    # Simulate the Lambda environment by passing an empty event and context
+    event = {}
+    context = None
+    lambda_handler(event, context)

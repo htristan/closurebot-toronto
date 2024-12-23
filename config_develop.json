@@ -1,10 +1,7 @@
 {
   "db_name": "Toronto-ClosureDB-Dev",
   "function_name": "ClosureBot-Toronto-Dev",
-  "Thread-LowerMainland": 1111,
-  "Thread-VancouverIsland": 1111,
-  "Thread-CatchAll": 1111,
   "license_notice": "Contains information licensed under the Open Government Licence – Toronto",
   "timezone": "US/Eastern",
-  "filter_keywords": ["closed", "detour", "road closure", "road closed", "both lanes", "hov lane blocked", "full closure" , "all lanes closed", "both directions blocked", "impassable"]
+  "filter_keywords": []
 }
